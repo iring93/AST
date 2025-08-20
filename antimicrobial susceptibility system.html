@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>台大醫院臨床分離菌株抗生素敏感性圖譜模擬介面</title>
+    <!-- Tailwind CSS via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React 18 + ReactDOM via CDN -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Babel for JSX transform in browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  </head>
+  <body class="bg-yellow-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useState, useMemo } = React;
+
+      function Tag({ children }) {
+        return (
+          <span className="inline-flex items-center rounded-full border px-2 py-1 text-xs text-slate-700">
+            {children}
+          </span>
+        );
+      }
+
+      function App() {
+        const [startYm, setStartYm] = useState("2024-10");
+        const [endYm, setEndYm] = useState("2025-03");
+        const [hospitals, setHospitals] = useState({ main: true, children: false });
+        const [taxaChecked, setTaxaChecked] = useState({});
+        const [taxaQuery, setTaxaQuery] = useState("");
+
+        const TAXA = [
+          { id: "agp", label: "AEROBIC GRAM POSITIVE" },
+          { id: "agn", label: "AEROBIC GRAM NEGATIVE" },
+          { id: "an_b", label: "ANAEROBIC BACTERIA" },
+          { id: "candida", label: "CANDIDA" },
+        ];
+
+        const SYMPTOMS = [
+          { id: "unknown", label: "不指定部位" },
+          { id: "blood", label: "血流感染" },
+          { id: "urine", label: "泌尿系感染" },
+          { id: "lung", label: "肺炎" },
+          { id: "surgical", label: "傷口感染" },
+          { id: "abdominal", label: "腹腔內感染" },
+        ];
+
+        const [symptoms, setSymptoms] = useState({});
+        const [onset, setOnset] = useState({
+          community: false,
+          noso_general: false,
+          noso_icu: false,
+        });
+
+        const filteredTaxa = useMemo(() => {
+          const q = taxaQuery.trim().toLowerCase();
+          if (!q) return TAXA;
+          return TAXA.filter((t) => t.label.toLowerCase().includes(q));
+        }, [taxaQuery]);
+
+        const allVisibleChecked = filteredTaxa.every((t) => !!taxaChecked[t.id]);
+
+        function toggleAllVisible(next) {
+          const on = typeof next === "boolean" ? next : !allVisibleChecked;
+          const copy = { ...taxaChecked };
+          filteredTaxa.forEach((t) => (copy[t.id] = on));
+          setTaxaChecked(copy);
+        }
+
+        function clearAll() {
+          setTaxaChecked({});
+        }
+
+        const selectionPreview = useMemo(() => {
+          const taxa = TAXA.filter((t) => taxaChecked[t.id]).map((t) => t.label);
+          const syms = SYMPTOMS.filter((s) => symptoms[s.id]).map((s) => s.label);
+          const hosp = [
+            hospitals.main ? "總院" : null,
+            hospitals.children ? "兒童醫院" : null,
+          ].filter(Boolean);
+          const onsetTags = [
+            onset.community ? "社區/院外" : null,
+            onset.noso_general ? "住院滿2日一般病房" : null,
+            onset.noso_icu ? "住院滿2日ICU/加護" : null,
+          ].filter(Boolean);
+          return { taxa, syms, hosp, onsetTags };
+        }, [taxaChecked, symptoms, hospitals, onset]);
+
+        function handleSubmit(e) {
+          e.preventDefault();
+          alert(
+            "已送出查詢！\\n\\n" +
+            "期間：" + startYm + " ~ " + endYm + "\\n" +
+            "醫院：" + (selectionPreview.hosp.join("、") || "（未選）") + "\\n" +
+            "菌群：" + (selectionPreview.taxa.join("、") || "（未選）") + "\\n" +
+            "症狀：" + (selectionPreview.syms.join("、") || "（未選）") + "\\n" +
+            "感染時間：" + (selectionPreview.onsetTags.join("、") || "（未選）")
+          );
+        }
+
+        return (
+          <div className="min-h-screen p-6">
+            <div className="mx-auto w-full max-w-5xl rounded-2xl border border-yellow-200 bg-white/70 shadow-sm">
+              {/* Header 說明列 */}
+              <div className="border-b border-yellow-200 bg-blue-50/60 p-4 text-sm text-slate-700">
+                <span className="inline-flex items-center gap-2 rounded-md bg-blue-100 px-2 py-1 text-blue-700">
+                  計算邏輯說明
+                </span>
+                <span className="ml-2">
+                  <p>分母：分析之菌種/屬及抗生素項目組合有藥敏試驗結果之菌株數。 分子：分母中抗生素藥敏試驗結果為 S 之菌株數。</p>
+                  <p>敏感性百分比 = 分子/分母*100%。</p>
+                  <p>同院區同病人同期間同菌種同抗生素，選擇第一筆採檢日資料；若該採檢日有多筆資料，則依藥敏試驗結果R>I>SDD>S之優先順序選取。</p>
+
+                </span>
+              </div>
+
+              {/* 內容表單 */}
+              <form onSubmit={handleSubmit} className="p-6">
+                {/* 資料期間 + 預覽 */}
+                <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <div className="col-span-3 flex flex-wrap items-center gap-3">
+                    <label className="text-sm font-medium text-slate-700">資料期間</label>
+                    <input
+                      type="month"
+                      value={startYm}
+                      onChange={(e) => setStartYm(e.target.value)}
+                      className="rounded-md border px-3 py-2 text-sm shadow-sm"
+                    />
+                    <span className="text-slate-500">至</span>
+                    <input
+                      type="month"
+                      value={endYm}
+                      onChange={(e) => setEndYm(e.target.value)}
+                      className="rounded-md border px-3 py-2 text-sm shadow-sm"
+                    />
+                    <span className="ml-2 text-xs text-slate-500">（預設最近6個月全院臨床檢體之抗生素感受性統計）</span>
+                  </div>
+
+                  <div className="col-span-3">
+                    <div className="mt-3 w-full rounded-xl border bg-white/70 p-4 text-sm shadow-sm">
+                      <div className="mb-1 font-medium text-slate-700">已選擇條件</div>
+                      <div className="flex flex-wrap gap-2">
+                        <Tag>期間：{startYm}～{endYm}</Tag>
+                        <Tag>院區：{selectionPreview.hosp.join("、") || "未選"}</Tag>
+                        <Tag>
+                          菌群：{selectionPreview.taxa.length > 0 ? selectionPreview.taxa.join("、") : "未選"}
+                        </Tag>
+                        <Tag>
+                          症狀：{selectionPreview.syms.length > 0 ? selectionPreview.syms.join("、") : "未選"}
+                        </Tag>
+                        <Tag>
+                          感染時間：{selectionPreview.onsetTags.length > 0 ? selectionPreview.onsetTags.join("、") : "未選"}
+                        </Tag>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                {/* 主體雙欄 */}
+                <section className="mt-4 grid grid-cols-1 gap-6 lg:grid-cols-2">
+                  {/* 左欄：細菌類型 */}
+                  <div className="rounded-2xl border bg-yellow-50/60 p-4">
+                    <div className="mb-1 text-sm text-slate-600">可複選下列細菌類型進行分析</div>
+                    <div className="mb-3 flex items-center justify-between">
+                      <div className="text-base font-semibold text-slate-800">
+                        全院各類細菌之抗生素感受性
+                        <span className="ml-1 align-top text-xs text-rose-500">＊</span>
+                      </div>
+                    </div>
+
+                    {/* 搜尋列 */}
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <input
+                          type="text"
+                          value={taxaQuery}
+                          onChange={(e) => setTaxaQuery(e.target.value)}
+                          placeholder="搜尋欲查詢的菌種"
+                          className="w-full rounded-lg border px-3 py-2 pr-10 text-sm shadow-sm focus:ring-2 focus:ring-blue-300"
+                        />
+                        <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-400">🔍</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          className="rounded-md border bg-white px-2 py-1 text-xs text-slate-700 shadow-sm hover:bg-slate-50"
+                          onClick={() => toggleAllVisible(true)}
+                          title="全選"
+                        >
+                          全選
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md border bg-white px-2 py-1 text-xs text-slate-700 shadow-sm hover:bg-slate-50"
+                          onClick={clearAll}
+                          title="清除全部"
+                        >
+                          清除全部
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 清單 */}
+                    <ul className="mt-3 space-y-2">
+                      {filteredTaxa.map((t) => (
+                        <li key={t.id} className="flex items-start gap-2 rounded-lg border bg-white px-3 py-2 shadow-sm">
+                          <input
+                            id={"taxa-" + t.id}
+                            type="checkbox"
+                            checked={!!taxaChecked[t.id]}
+                            onChange={(e) => setTaxaChecked((prev) => ({ ...prev, [t.id]: e.target.checked }))}
+                            className="mt-0.5 h-4 w-4"
+                          />
+                          <label htmlFor={"taxa-" + t.id} className="cursor-pointer text-sm text-slate-800">
+                            {t.label}
+                          </label>
+                        </li>
+                      ))}
+                      {filteredTaxa.length === 0 && (
+                        <li className="rounded-lg border bg-white px-3 py-6 text-center text-sm text-slate-500">
+                          無相符項目
+                        </li>
+                      )}
+                    </ul>
+                  </div>
+
+                  {/* 右欄：院區 & 進階條件 */}
+                  <div className="rounded-2xl border bg-yellow-50/60 p-4">
+                    {/* 院區選擇 */}
+                    <div className="mb-4 rounded-xl border bg-white/70 p-4 shadow-sm">
+                      <div className="text-base font-semibold text-slate-800">
+                        院區選擇（可複選）<span className="ml-1 align-top text-xs text-rose-500">＊</span>
+                      </div>
+                      <div className="mt-1 text-sm text-slate-600">選擇要分析的院區，可同時選擇多個院區進行計算</div>
+                      <div className="mt-3 grid grid-cols-2 gap-3 sm:w-2/3">
+                        <label className="flex items-center gap-2 text-sm text-slate-800">
+                          <input
+                            type="checkbox"
+                            checked={hospitals.main}
+                            onChange={(e) => setHospitals((p) => ({ ...p, main: e.target.checked }))}
+                            className="h-4 w-4"
+                          />
+                          總院
+                        </label>
+                        <label className="flex items-center gap-2 text-sm text-slate-800">
+                          <input
+                            type="checkbox"
+                            checked={hospitals.children}
+                            onChange={(e) => setHospitals((p) => ({ ...p, children: e.target.checked }))}
+                            className="h-4 w-4"
+                          />
+                          兒童醫院
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* 進階條件 */}
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      {/* 病人症狀 */}
+                      <div className="rounded-xl border bg-white/70 p-4 shadow-sm">
+                        <div className="text-base font-semibold text-slate-800">病人症狀</div>
+                        <div className="mt-1 text-sm text-slate-600">選擇後，感受性百分比將只計算該選擇部位之檢體</div>
+                        <div className="mt-2 space-y-3">
+                          {SYMPTOMS.map((s) => (
+                            <label key={s.id} className="flex items-center gap-2 text-sm text-slate-800">
+                              <input
+                                type="checkbox"
+                                checked={!!symptoms[s.id]}
+                                onChange={(e) => setSymptoms((prev) => ({ ...prev, [s.id]: e.target.checked }))}
+                                className="h-4 w-4"
+                              />
+                              {s.label}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* 感染時間 */}
+                      <div className="rounded-xl border bg-white/70 p-4 shadow-sm">
+                        <div className="text-base font-semibold text-slate-800">感染時間（可複選）</div>
+                        <div className="mt-1 text-sm text-slate-600">可選擇多個感染時間進行計算</div>
+                        <div className="mt-2 space-y-3 text-sm">
+                          <label className="flex items-center gap-2 text-slate-800">
+                            <input
+                              type="checkbox"
+                              checked={onset.community}
+                              onChange={(e) => setOnset((p) => ({ ...p, community: e.target.checked }))}
+                              className="h-4 w-4"
+                            />
+                            社區/院外感染
+                          </label>
+                          <label className="flex items-center gap-2 text-slate-800">
+                            <input
+                              type="checkbox"
+                              checked={onset.noso_general}
+                              onChange={(e) => setOnset((p) => ({ ...p, noso_general: e.target.checked }))}
+                              className="h-4 w-4"
+                            />
+                            入院滿2日且感染於一般病房
+                          </label>
+                          <label className="flex items-center gap-2 text-slate-800">
+                            <input
+                              type="checkbox"
+                              checked={onset.noso_icu}
+                              onChange={(e) => setOnset((p) => ({ ...p, noso_icu: e.target.checked }))}
+                              className="h-4 w-4"
+                            />
+                            入院滿2日且感染於加護病房
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                {/* 底部：動作 */}
+                <section className="mt-6 flex justify-center">
+                  <button type="submit" className="rounded-xl bg-amber-500 px-6 py-2 text-white shadow transition hover:bg-amber-600">
+                    確定
+                  </button>
+                </section>
+
+                <div className="mt-6 border-t pt-4 text-xs text-slate-500">
+                  參考：Clinical and Laboratory Standards Institute (CLSI) M100 S34 表型與感受性定義註釋（模擬畫面，非實際醫囑系統）
+                </div>
+              </form>
+            </div>
+          </div>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
