@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>模擬台大醫院 Candida 抗真菌藥物感受性報表</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-50">
+  <div class="max-w-screen-2xl w-full mx-auto py-8 px-4">
+    <h1 class="text-xl font-semibold text-slate-800 mb-2">模擬台大醫院 Candida 抗真菌藥物感受性報表</h1>
+    <p class="text-slate-600 text-sm mb-4">使用說明：+/- 可展開</p>
+    <div id="root"></div>
+  </div>
+
+  <script type="text/babel" data-presets="react">
+    /** Utils **/
+    const byId = (arr, key='id') => Object.fromEntries(arr.map(x => [x[key] || x.microbe_name, x]));
+
+    function normalizeClass(s) {
+      return String(s || "").replace(/\\.(\d+)$/, "");
+    }
+    function clamp(n, a=0, b=100){ return Math.max(a, Math.min(b, n)); }
+
+    /** 判斷是否為 S：優先用分類（cat[row][abx] = 'S'|'I'|'R'）；否則以 %S >= thresholdS 視為 S **/
+    function makeIsSGetter({data, cat, thresholdS=80}){
+      return (rowKey, abxShort)=>{
+        const label = cat?.[rowKey]?.[abxShort];
+        if (label) return label.toUpperCase()==='S';
+        const pct = data?.[rowKey]?.[abxShort];
+        if (typeof pct === 'number') return pct >= thresholdS;
+        return false;
+      };
+    }
+
+    /** 計算父層平均：不加權、只取有值子列；若父層自身有值，優先顯示自身值 **/
+    function computeParentAverage(rowKey, abxShort, childrenRowKeys, data) {
+      const self = data?.[rowKey]?.[abxShort];
+      if (typeof self === 'number') return self; // 有原始值就用它
+      if (typeof self === 'string') return self; // 如果是字串(如 "NI")也直接返回
+      
+      // 收集子項目的值
+      const childValues = [];
+      for (const ck of childrenRowKeys) {
+        const v = data?.[ck]?.[abxShort];
+        if (v !== undefined && v !== null) {
+          childValues.push(v);
+        }
+      }
+      
+      if (childValues.length === 0) return null;
+      
+      // 如果所有子項目都是相同的字串值（如都是 "NI"），父層也返回該字串
+      const stringValues = childValues.filter(v => typeof v === 'string');
+      if (stringValues.length === childValues.length && stringValues.every(v => v === stringValues[0])) {
+        return stringValues[0]; // 返回統一的字串值
+      }
+      
+      // 計算數值的平均值
+      const numericValues = childValues.filter(v => typeof v === 'number');
+      if (numericValues.length === 0) return null;
+      
+      const sum = numericValues.reduce((acc, v) => acc + v, 0);
+      return Math.round(sum / numericValues.length);
+    }
+
+    /** 建立簡單列表結構 (不需要父子層) **/
+    function buildSimpleHierarchy({ microbes, data, cat, antibiotics }){
+      const nodes = [];               
+      const childrenBy = {};         
+      const categories = {};         
+
+      // 創建一個 Candida 分類
+      const catNode = { id: "__CAT__CANDIDA", microbe_name: "Candida", _type: 'category' };
+      nodes.push(catNode);
+      categories["__CAT__CANDIDA"] = catNode;
+
+      // 直接將所有微生物加入分類下，無需父子層
+      microbes.forEach(m => {
+        nodes.push(m);
+        (childrenBy[catNode.id] ||= []).push(m);
+      });
+
+      return { nodes, childrenBy, categories };
+    }
+
+    function CandidaSusceptibilityTable({
+      title = "這邊顯示ex:總院 202401-202406 Candida ....主畫面篩選結果",
+      antibiotics = [],
+      microbes = [],
+      data = {},
+      meta = {},
+      cat = {},              
+      showOnlyWithData = true,
+    }) {
+      const [showAllAntibiotics, setShowAllAntibiotics] = React.useState(!showOnlyWithData);
+      const [expanded, setExpanded] = React.useState({}); // 展開狀態：key:boolean
+      const minCoverage = 1;
+
+      const { nodes, childrenBy, categories } = React.useMemo(
+        () => buildSimpleHierarchy({ microbes, data, cat, antibiotics }),
+        [microbes, data, cat, antibiotics]
+      );
+
+      // 預設將第 1 層（分類）打開
+      React.useEffect(() => {
+        const next = {};
+        for (const n of nodes) {
+          if (n._type === 'category') next[n.id] = true;
+        }
+        setExpanded(next);
+      }, [nodes, childrenBy]);
+
+      function getChildrenKeys(parent){
+        const pk = parent.id || parent.microbe_name;
+        return (childrenBy[pk] || []).map(n => n.id || n.microbe_name);
+      }
+
+      // 依展開狀態攤平成可見列
+      const visibleRows = [];
+      function pushNode(n, level){
+        const key = n.id || n.microbe_name;
+        visibleRows.push({ ...n, _level: level, _hasChildren: (childrenBy[key]?.length || 0) > 0 });
+        if (expanded[key]) {
+          for (const c of (childrenBy[key] || [])) pushNode(c, level+1);
+        }
+      }
+      // 根據 categories 的插入順序輸出
+      Object.values(categories).forEach(catNode => pushNode(catNode, 0));
+
+      // coverage
+      const coverage = {};
+      for (let i = 0; i < antibiotics.length; i++) {
+        const short = antibiotics[i].anti_shortname;
+        let cnt = 0;
+        for (let r = 0; r < visibleRows.length; r++) {
+          const rowKey = visibleRows[r].id || visibleRows[r].microbe_name;
+          const val = data?.[rowKey]?.[short];
+          if (typeof val === 'number') cnt++;
+        }
+        coverage[short] = cnt;
+      }
+
+      const visibleAntibiotics = showAllAntibiotics
+        ? antibiotics
+        : antibiotics.filter(a => (coverage[a.anti_shortname] || 0) >= minCoverage);
+      const hiddenCount = antibiotics.length - visibleAntibiotics.length;
+
+      const classGroups = React.useMemo(() => {
+        const groups = [];
+        let i = 0;
+        while (i < visibleAntibiotics.length) {
+          const clsDisp = normalizeClass(visibleAntibiotics[i].anti_class);
+          let j = i + 1;
+          while (j < visibleAntibiotics.length && normalizeClass(visibleAntibiotics[j].anti_class) === clsDisp) j++;
+          groups.push({ anti_class: clsDisp, span: j - i });
+          i = j;
+        }
+        return groups;
+      }, [visibleAntibiotics]);
+
+      const isGroupEnd = React.useMemo(() => {
+        const ends = [];
+        for (let i = 0; i < visibleAntibiotics.length; i++) {
+          const cur = normalizeClass(visibleAntibiotics[i].anti_class);
+          const nxt = i + 1 < visibleAntibiotics.length ? normalizeClass(visibleAntibiotics[i + 1].anti_class) : null;
+          ends.push(cur !== nxt);
+        }
+        return ends;
+      }, [visibleAntibiotics]);
+
+      function toggleRow(n){
+        const key = n.id || n.microbe_name;
+        setExpanded(prev => ({ ...prev, [key]: !prev[key] }));
+      }
+
+      function valueForCell(row, aShort){
+        const rowKey = row.id || row.microbe_name;
+        const direct = data?.[rowKey]?.[aShort];
+        if (typeof direct === 'number') return direct;
+        if (typeof direct === 'string') return direct; // 處理 "NI" 等字串值
+        
+        if (row._hasChildren) {
+          const childKeys = getChildrenKeys(row);
+          const avg = computeParentAverage(rowKey, aShort, childKeys, data);
+          return avg; // 可能是數字、字串或null
+        }
+        return null;
+      }
+
+      function tooltip(a, row) {
+        const rowKey = row.id || row.microbe_name;
+        const val = valueForCell(row, a.anti_shortname);
+        
+        if (typeof data?.[rowKey]?.[a.anti_shortname] === 'number') {
+          // 原始數據 - 假設基數100來計算菌株數
+          const percentS = data[rowKey][a.anti_shortname];
+          const totalStrains = 100; // 假設基數
+          const sensitiveStrains = Math.round(totalStrains * percentS / 100);
+          
+          return `抗真菌藥物: ${a.anti_name || a.anti_shortname}\n真菌: ${row.microbe_name}\n分離菌株數: ${totalStrains}\n感受性 S菌株數: ${sensitiveStrains}`;
+        }
+        
+        if (typeof data?.[rowKey]?.[a.anti_shortname] === 'string') {
+          // 字串值如 "NI"
+          return `抗真菌藥物: ${a.anti_name || a.anti_shortname}\n真菌: ${row.microbe_name}\n狀態: ${data[rowKey][a.anti_shortname]}`;
+        }
+        
+        if (row._hasChildren && typeof val === 'number') {
+          // 父層平均值 - 顯示計算來源
+          const childKeys = getChildrenKeys(row);
+          const used = childKeys.filter(k => typeof data?.[k]?.[a.anti_shortname] === 'number').length;
+          const totalStrains = used * 100; // 假設每個子項目100株
+          const sensitiveStrains = Math.round(totalStrains * val / 100);
+          
+          return `抗真菌藥物: ${a.anti_name || a.anti_shortname}\n真菌: ${row.microbe_name}\n分離菌株數: ${totalStrains} (${used}子項目平均)\n感受性 S菌株數: ${sensitiveStrains}`;
+        }
+        
+        return `抗真菌藥物: ${a.anti_name || a.anti_shortname}\n真菌: ${row.microbe_name}\n分離菌株數: -\n感受性 S菌株數: -`;
+      }
+
+      const hasData = visibleRows.length > 0 && visibleAntibiotics.length > 0;
+
+      function bgByLevel(depth, isCategory) {
+        if (isCategory) return "bg-slate-100"; // 分類列(Candida)
+        return "bg-white";                     // 一般真菌
+      }
+
+      return (
+        <div className="p-6 bg-white rounded-2xl shadow">
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <div className="text-sm font-medium text-slate-800">{title}</div>
+              <div className="text-xs text-slate-500">分母：分析之菌種/屬及抗真菌藥物項目組合有藥敏試驗結果之菌株數。 分子：分母中抗真菌藥物藥敏試驗結果為 S 之菌株數。敏感性百分比 = 分子/分母*100%。</div>
+            </div>
+            <div className="text-xs text-slate-600">
+              可見抗真菌藥物：<span className="font-medium text-slate-800">{visibleAntibiotics.length}</span> / {antibiotics.length}
+              {hiddenCount > 0 && <span className="ml-1 text-slate-400">（隱藏 {hiddenCount}）</span>}
+              <button
+                type="button"
+                onClick={() => setShowAllAntibiotics(v => !v)}
+                className="ml-3 rounded-lg border border-slate-200 bg-white px-2.5 py-1 hover:bg-slate-50"
+              >
+                {showAllAntibiotics ? "只顯示有數據" : "顯示全部抗真菌藥物"}
+              </button>
+            </div>
+          </div>
+
+          {!hasData ? (
+            <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-slate-500">尚未載入資料。</div>
+          ) : (
+            <div className="overflow-x-auto w-full">
+              <table className="min-w-[1400px] w-full border-separate border-spacing-0 text-sm text-center">
+                <thead>
+                  <tr>
+                    <th className="sticky left-0 z-10 border-b border-slate-200 bg-white px-3 py-1 text-left text-xs font-medium text-slate-600" rowSpan={2}>分類 / 真菌名稱</th>
+                    {classGroups.map((g, idx) => (
+                      <th key={idx} className="border-b border-slate-200 bg-slate-50 px-3 py-1 text-center text-[11px] font-medium text-slate-700" colSpan={g.span}>
+                        {g.anti_class}
+                      </th>
+                    ))}
+                  </tr>
+                  <tr>
+                    {visibleAntibiotics.map((a, idx) => (
+                      <th
+                        key={idx}
+                        className={"border-b border-slate-200 bg-white px-3 py-2 text-center align-bottom " + (isGroupEnd[idx] ? "border-r-4 border-r-slate-300" : "")}
+                        title={a.anti_name}
+                      >
+                        <span className="text-xs font-medium text-slate-800">{a.anti_shortname}</span>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleRows.map((m) => {
+                    const key = m.id || m.microbe_name;
+                    const depth = m._level || 0;
+                    const hasChildren = !!m._hasChildren;
+                    const isCategory = m._type === 'category';
+                    return (
+                      <tr key={key} className={`${bgByLevel(depth, isCategory)} hover:bg-slate-50/60`}>
+                        <td className={"sticky left-0 z-0 px-3 py-2 text-sm " + (isCategory ? "font-semibold text-slate-700 bg-slate-100" : "text-slate-800 bg-white")}>
+                          <div className="flex items-center gap-2">
+                            {hasChildren ? (
+                              <button
+                                type="button"
+                                onClick={() => toggleRow(m)}
+                                className={"mr-1 h-5 w-5 rounded border border-slate-300 text-xs leading-4 " + (expanded[key] ? "bg-slate-600 text-white border-slate-600" : "bg-white")}
+                                title={expanded[key] ? "收合" : "展開"}
+                              >
+                                {expanded[key] ? "−" : "+"}
+                              </button>
+                            ) : (
+                              <span className="mr-6" />
+                            )}
+
+                            {/* 這個 span 做縮排＆導引線 */}
+                            <span
+                              style={{
+                                paddingLeft: Math.max(0, depth - 1) * 12,          // 縮排
+                                borderLeft: depth > 1 ? "2px solid #cbd5e1" : "0", // 導引線（slate-300）
+                              }}
+                              className={
+                                depth === 0 ? "font-bold text-slate-800" :
+                                depth === 1 ? "font-semibold text-slate-700" :
+                                "text-slate-600 text-sm"
+                              }
+                            >
+                              {m.microbe_name}
+                            </span>
+                          </div>
+                        </td>
+                          
+                        {visibleAntibiotics.map((a, cIdx) => {
+                          const v = valueForCell(m, a.anti_shortname);
+                          let display, quality;
+                          
+                          if (typeof v === 'number') {
+                            display = `${clamp(v)}%`;
+                            quality = v >= 80 ? "good" : v >= 60 ? "warn" : "bad";
+                          } else if (typeof v === 'string') {
+                            display = v; // 直接顯示字串值如 "NI"
+                            quality = "na";
+                          } else {
+                            display = "-";
+                            quality = "na";
+                          }
+                          
+                          return (
+                            <td key={cIdx} className={"px-3 py-2 text-sm text-center " + (isGroupEnd[cIdx] ? "border-r-4 border-r-slate-200" : "")}>
+                              <span
+                                className={
+                                  quality === "good" ? "rounded-md bg-emerald-50 px-2 py-0.5 text-emerald-700" :
+                                  quality === "warn" ? "rounded-md bg-amber-50 px-2 py-0.5 text-amber-700" :
+                                  quality === "bad" ? "rounded-md bg-rose-50 px-2 py-0.5 text-rose-700" :
+                                  "text-slate-500"
+                                }
+                                title={tooltip(a, m)}
+                              >
+                                {display}
+                              </span>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <div className="mt-3 text-xs text-slate-500">~~~測試資料測試資料測試資料~~~</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    /*****************
+     * 測試資料區    *
+     *****************/
+    const antibioticsFromExcel = [
+      { anti_class: "Azoles", anti_shortname: "FL", anti_name: "Fluconazole" },
+      { anti_class: "Azoles", anti_shortname: "Vori", anti_name: "Voriconazole" },
+      { anti_class: "Echinocandins", anti_shortname: "AND", anti_name: "Anidulafungin" },
+      { anti_class: "Echinocandins", anti_shortname: "CAS", anti_name: "Caspofungin" },
+      { anti_class: "Echinocandins", anti_shortname: "MF", anti_name: "Micafungin" },
+      { anti_class: "Polyenes", anti_shortname: "AB", anti_name: "Amphotericin B" },
+      { anti_class: "Pyrimidines", anti_shortname: "FLU", anti_name: "Flucytosine" }
+    ];
+
+    const microbesFromTest = [
+      { id: "CANDIDA_SPECIES", microbe_name: "Candida species" },
+      { id: "CANDIDA_TROPICALIS", microbe_name: "Candida tropicalis" },
+      { id: "CANDIDA_ALBICANS", microbe_name: "Candida albicans" },
+      { id: "NAKASEOMYCES_GLABRATA", microbe_name: "Nakaseomyces glabrata (Candida glabrata)" },
+      { id: "CANDIDA_PARAPSILOSIS", microbe_name: "Candida parapsilosis complex" }
+    ];
+
+    // 假資料：%S（示意）
+    const excelData = {
+      CANDIDA_SPECIES: { FL: 82, Vori: 88, AND: 96, CAS: 94, MF: 96, AB: 'NI', FLU: 'NI' },
+      CANDIDA_TROPICALIS: { FL: 75, Vori: 92, AND: 98, CAS: 95, MF: 97, AB: "NI", FLU: "NI" },
+      CANDIDA_ALBICANS: { FL: 95, Vori: 98, AND: 99, CAS: 96, MF: 98, AB: "NI", FLU: "NI" },
+      NAKASEOMYCES_GLABRATA: { FL: 15, Vori: 45, AND: 95, CAS: 92, MF: 94, AB: "NI", FLU: "NI" },
+      CANDIDA_PARAPSILOSIS: { FL: 88, Vori: 95, AND: 97, CAS: 93, MF: 96, AB: "NI", FLU: "NI" }
+    };
+
+    // 可選：若提供 I/S/R 類別，可優先用它判斷是否為 S
+    const catStatus = {
+      // 例如：CANDIDA_TROPICALIS: { FL: "S" }
+    };
+
+    function Preview(){
+      return (
+        <CandidaSusceptibilityTable
+          antibiotics={antibioticsFromExcel}
+          microbes={microbesFromTest}
+          data={excelData}
+          cat={catStatus}
+        />
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<Preview />);
+  </script>
+</body>
+</html>
