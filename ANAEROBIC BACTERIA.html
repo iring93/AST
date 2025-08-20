@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>模擬台大醫院ANAEROBIC BACTERIA微生物抗生素感受性報表</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-50">
+  <div class="max-w-screen-2xl w-full mx-auto py-8 px-4">
+    <h1 class="text-xl font-semibold text-slate-800 mb-2">模擬台大醫院ANAEROBIC BACTERIA微生物抗生素感受性報表</h1>
+    <p class="text-slate-600 text-sm mb-4">使用說明：+/- 可展開，基於745筆檢驗結果 (包含AN-GN及AN-GP)</p>
+    <div id="root"></div>
+  </div>
+
+  <script type="text/babel" data-presets="react">
+    /** Utils **/
+    const byId = (arr, key='id') => Object.fromEntries(arr.map(x => [x[key] || x.microbe_name, x]));
+
+    function normalizeClass(s) {
+      return String(s || "").replace(/\.(\\d+)$/, "");
+    }
+    function clamp(n, a=0, b=100){ return Math.max(a, Math.min(b, n)); }
+
+    /** 判斷是否為 S：優先用分類（cat[row][abx] = 'S'|'I'|'R'）；否則以 %S >= thresholdS 視為 S **/
+    function makeIsSGetter({data, cat, thresholdS=80}){
+      return (rowKey, abxShort)=>{
+        const label = cat?.[rowKey]?.[abxShort];
+        if (label) return label.toUpperCase()==='S';
+        const pct = data?.[rowKey]?.[abxShort];
+        if (typeof pct === 'number') return pct >= thresholdS;
+        return false;
+      };
+    }
+
+    /** 計算父層平均：不加權、只取有值子列；若父層自身有值，優先顯示自身值 **/
+    function computeParentAverage(rowKey, abxShort, childrenRowKeys, data) {
+      const self = data?.[rowKey]?.[abxShort];
+      if (typeof self === 'number') return self; // 有原始值就用它
+      let sum = 0, cnt = 0;
+      for (const ck of childrenRowKeys) {
+        const v = data?.[ck]?.[abxShort];
+        if (typeof v === 'number') { sum += v; cnt++; }
+      }
+      if (cnt === 0) return null;
+      return Math.round(sum / cnt);
+    }
+
+    /** 建立階層（支持 1~3 層）：回傳 {nodes, childrenBy, categories} **/
+    function buildHierarchy({ microbes, data, cat, antibiotics, sortAlphabetically = false }){
+      const isS = makeIsSGetter({data, cat, thresholdS:80});
+
+      const nodes = [];               // 所有節點（按顯示層級順序）
+      const childrenBy = {};         // childrenBy[parentKey] = [childNodes...]
+      const categories = {};         // 類別（AN-GN/AN-GP）做為最外層
+      const reg = {
+        bacteroides: /^Bacteroides(\b|\s)/i,
+        clostridium: /^Clostrid(\b|\s)/i,
+        bifidobacterium: /^Bifidobacterium(\b|\s)/i
+      };
+
+      // 先依名稱快速索引
+      const mIndex = byId(microbes, 'id');
+      const byName = Object.fromEntries(microbes.map(m => [m.microbe_name, m]));
+
+      /** 建 category helper **/
+      function ensureCategory(catLabel){
+        const key = "__CAT__" + catLabel;
+        if (!categories[key]) {
+          const n = { id:key, microbe_name:catLabel, _type:'category' };
+          nodes.push(n);
+          categories[key] = n;
+        }
+        return categories[key];
+      }
+      function addChild(p, c){
+        const pk = p.id || p.microbe_name;
+        (childrenBy[pk] ||= []).push(c);
+      }
+
+      function shortenGenus(fullName) {
+        const parts = fullName.trim().split(/\\s+/);
+        if (parts.length >= 2) {
+          const genus = parts[0];
+          const species = parts.slice(1).join(" ");
+          return genus.charAt(0) + ". " + species;
+        }
+        return fullName; // fallback: 如果只有一個字就原樣返回
+      }
+
+      /** 1) AN-GN → Bacteroides 屬群組 **/
+      (function(){
+        const catNode = ensureCategory("AN-GN");
+        const bacteroidesGroup = { id:"__P_BACTEROIDES__", microbe_name:"Bacteroides", _virtual:true };
+        nodes.push(bacteroidesGroup); 
+        addChild(catNode, bacteroidesGroup);
+
+        // 收納 Bacteroides* 物種
+        const bacteroidesSpecies = microbes.filter(m => reg.bacteroides.test(m.microbe_name));
+        const sortedBacteroides = sortAlphabetically 
+          ? bacteroidesSpecies.sort((a, b) => a.microbe_name.localeCompare(b.microbe_name))
+          : bacteroidesSpecies;
+          
+        sortedBacteroides.forEach(b => {
+          addChild(bacteroidesGroup, b);
+        });
+      })();
+
+      /** 2) AN-GN → 其他厭氧革蘭氏陰性菌 **/
+      (function(){
+        const catNode = ensureCategory("AN-GN");
+        const otherANGN = microbes.filter(m => 
+          !reg.bacteroides.test(m.microbe_name) &&
+          (m.microbe_name.includes("Phocaeicola") ||
+           m.microbe_name.includes("Prevotella") ||
+           m.microbe_name.includes("Fusobacterium") ||
+           m.microbe_name.includes("Parabacteroides"))
+        );
+        
+        const sortedOtherANGN = sortAlphabetically 
+          ? otherANGN.sort((a, b) => a.microbe_name.localeCompare(b.microbe_name))
+          : otherANGN;
+          
+        sortedOtherANGN.forEach(o => {
+          nodes.push(o);
+          addChild(catNode, o);
+        });
+      })();
+
+      /** 3) AN-GP → Clostridioides difficile 特殊處理 **/
+      (function(){
+        const catNode = ensureCategory("AN-GP");
+        const cdiff = byName["Clostridioides difficile(困難梭狀桿菌)"];
+        if (cdiff) {
+          nodes.push(cdiff);
+          addChild(catNode, cdiff);
+        }
+      })();
+
+      /** 4) AN-GP → Clostridium 屬群組 **/
+      (function(){
+        const catNode = ensureCategory("AN-GP");
+        const clostridiumGroup = { id:"__P_CLOSTRIDIUM__", microbe_name:"Clostridium", _virtual:true };
+        nodes.push(clostridiumGroup); 
+        addChild(catNode, clostridiumGroup);
+
+        // 收納 Clostridium* 物種（排除 Clostridioides difficile）
+        const clostridiumSpecies = microbes.filter(m => 
+          reg.clostridium.test(m.microbe_name) && 
+          !m.microbe_name.includes("Clostridioides difficile")
+        );
+        
+        const sortedClostridium = sortAlphabetically 
+          ? clostridiumSpecies.sort((a, b) => a.microbe_name.localeCompare(b.microbe_name))
+          : clostridiumSpecies;
+          
+        sortedClostridium.forEach(c => {
+          addChild(clostridiumGroup, c);
+        });
+      })();
+
+      /** 5) AN-GP → 其他厭氧革蘭氏陽性菌 **/
+      (function(){
+        const catNode = ensureCategory("AN-GP");
+        const otherANGP = microbes.filter(m => 
+          !reg.clostridium.test(m.microbe_name) &&
+          !m.microbe_name.includes("Clostridioides difficile") &&
+          (m.microbe_name.includes("Finegoldia") ||
+           m.microbe_name.includes("Peptoniphilus") ||
+           m.microbe_name.includes("Parvimonas") ||
+           m.microbe_name.includes("Bifidobacterium"))
+        );
+        
+        const sortedOtherANGP = sortAlphabetically 
+          ? otherANGP.sort((a, b) => a.microbe_name.localeCompare(b.microbe_name))
+          : otherANGP;
+          
+        sortedOtherANGP.forEach(o => {
+          nodes.push(o);
+          addChild(catNode, o);
+        });
+      })();
+
+      return { nodes, childrenBy, categories };
+    }
+
+    function ASTSusceptibilityTable({
+      title = "模擬台大醫院 2024年 ANAEROBIC BACTERIA 微生物抗生素感受性報表（基於745筆檢驗結果）",
+      antibiotics = [],
+      microbes = [],
+      data = {},
+      meta = {},
+      cat = {},              // 可選：S/I/R 類別，若無則用 %S >= 80 判斷
+      showOnlyWithData = true,
+    }) {
+      const [showAllAntibiotics, setShowAllAntibiotics] = React.useState(!showOnlyWithData);
+      const [expanded, setExpanded] = React.useState({}); // 展開狀態：key:boolean
+      const [sortAlphabetically, setSortAlphabetically] = React.useState(false); // 字母排序
+      const [showLowCountMicrobes, setShowLowCountMicrobes] = React.useState(true); // 顯示低菌株數微生物
+      const minCoverage = 1;
+      const minStrainCount = 20; // 厭氧菌數量較少，設定為20株
+
+      const { nodes, childrenBy, categories } = React.useMemo(
+        () => buildHierarchy({ microbes, data, cat, antibiotics, sortAlphabetically }),
+        [microbes, data, cat, antibiotics, sortAlphabetically]
+      );
+
+      // 實際菌株數量對照表（基於CSV數據統計）
+      const strainCounts = {
+        "Clostridioides difficile": 170,
+        "Bacteroides fragilis": 160,
+        "Bacteroides thetaiotaomicron": 59,
+        "Finegoldia magna": 36,
+        "Clostridium perfringens": 36,
+        "Peptoniphilus sp": 23,
+        "Phocaeicola vulgatus(Bacteroides vulgatus)": 21,
+        "Prevotella bivia": 20,
+        "Fusobacterium varium": 17,
+        "Bacteroides ovatus": 17,
+        "Parvimonas micra": 16,
+        "Parabacteroides distasonis": 12,
+        "Clostridium innocuum": 9,
+        "Clostridium ramosum": 9,
+        "Bifidobacterium longum": 8,
+        "Bifidobacterium breve": 8,
+        "Finegoldia species": 8,
+        "Bacteroides pyogenes": 7,
+        "Bacteroides uniformis": 5
+      };
+
+      function getStrainCount(microbeName) {
+        return strainCounts[microbeName] || 0;
+      }
+
+      // 預設將第 1 層（分類）與第 2 層（父層）打開
+      React.useEffect(() => {
+        const next = {};
+        for (const n of nodes) {
+          if (n._type === 'category') next[n.id] = true;
+          const k = n.id || n.microbe_name;
+          if (childrenBy[k]?.length) next[k] = true;
+        }
+        setExpanded(next);
+      }, [nodes, childrenBy]);
+
+      function getChildrenKeys(parent){
+        const pk = parent.id || parent.microbe_name;
+        return (childrenBy[pk] || []).map(n => n.id || n.microbe_name);
+      }
+
+      // 依展開狀態攤平成可見列，並根據菌株數篩選
+      const visibleRows = [];
+      function pushNode(n, level){
+        const key = n.id || n.microbe_name;
+        const strainCount = getStrainCount(n.microbe_name);
+        
+        // 如果設定隱藏低菌株數且不是分類節點，檢查菌株數
+        if (!showLowCountMicrobes && n._type !== 'category' && !n._virtual && strainCount > 0 && strainCount < minStrainCount) {
+          return; // 跳過這個節點
+        }        
+
+        visibleRows.push({ ...n, _level: level, _hasChildren: (childrenBy[key]?.length || 0) > 0 });
+        if (expanded[key]) {
+          for (const c of (childrenBy[key] || [])) pushNode(c, level+1);
+        }
+      }
+      // 根據 categories 的插入順序輸出
+      Object.values(categories).forEach(catNode => pushNode(catNode, 0));
+
+      // coverage
+      const coverage = {};
+      for (let i = 0; i < antibiotics.length; i++) {
+        const short = antibiotics[i].anti_shortname;
+        let cnt = 0;
+        for (let r = 0; r < visibleRows.length; r++) {
+          const rowKey = visibleRows[r].id || visibleRows[r].microbe_name;
+          const val = data?.[rowKey]?.[short];
+          if (typeof val === 'number') cnt++;
+        }
+        coverage[short] = cnt;
+      }
+
+      const visibleAntibiotics = showAllAntibiotics
+        ? antibiotics
+        : antibiotics.filter(a => (coverage[a.anti_shortname] || 0) >= minCoverage);
+      const hiddenCount = antibiotics.length - visibleAntibiotics.length;
+
+      const classGroups = React.useMemo(() => {
+        const groups = [];
+        let i = 0;
+        while (i < visibleAntibiotics.length) {
+          const clsDisp = normalizeClass(visibleAntibiotics[i].anti_class);
+          let j = i + 1;
+          while (j < visibleAntibiotics.length && normalizeClass(visibleAntibiotics[j].anti_class) === clsDisp) j++;
+          groups.push({ anti_class: clsDisp, span: j - i });
+          i = j;
+        }
+        return groups;
+      }, [visibleAntibiotics]);
+
+      const isGroupEnd = React.useMemo(() => {
+        const ends = [];
+        for (let i = 0; i < visibleAntibiotics.length; i++) {
+          const cur = normalizeClass(visibleAntibiotics[i].anti_class);
+          const nxt = i + 1 < visibleAntibiotics.length ? normalizeClass(visibleAntibiotics[i + 1].anti_class) : null;
+          ends.push(cur !== nxt);
+        }
+        return ends;
+      }, [visibleAntibiotics]);
+
+      function toggleRow(n){
+        const key = n.id || n.microbe_name;
+        setExpanded(prev => ({ ...prev, [key]: !prev[key] }));
+      }
+
+      function valueForCell(row, aShort){
+        const rowKey = row.id || row.microbe_name;
+        const direct = data?.[rowKey]?.[aShort];
+        if (typeof direct === 'number') return direct;
+        if (row._hasChildren) {
+          const childKeys = getChildrenKeys(row);
+          const avg = computeParentAverage(rowKey, aShort, childKeys, data);
+          return typeof avg === 'number' ? avg : null;
+        }
+        return null;
+      }
+
+      function tooltip(a, row) {
+        const rowKey = row.id || row.microbe_name;
+        const val = valueForCell(row, a.anti_shortname);
+        
+        if (typeof data?.[rowKey]?.[a.anti_shortname] === 'number') {
+          // 原始數據
+          const percentS = data[rowKey][a.anti_shortname];
+          const totalStrains = getStrainCount(row.microbe_name);
+          const sensitiveStrains = Math.round(totalStrains * percentS / 100);
+          
+          return `抗生素: ${a.anti_name || a.anti_shortname}\n微生物: ${row.microbe_name}\n檢驗菌株數: ${totalStrains}\n感受性 S菌株數: ${sensitiveStrains}\n感受性百分比: ${percentS}%`;
+        }
+        
+        if (row._hasChildren && typeof val === 'number') {
+          // 父層平均值 - 顯示計算來源
+          const childKeys = getChildrenKeys(row);
+          const childStrains = childKeys.map(k => {
+            const childName = nodes.find(n => (n.id || n.microbe_name) === k)?.microbe_name;
+            return getStrainCount(childName) || 0;
+          });
+          const totalStrains = childStrains.reduce((sum, count) => sum + count, 0);
+          const sensitiveStrains = Math.round(totalStrains * val / 100);
+          
+          return `抗生素: ${a.anti_name || a.anti_shortname}\n微生物: ${row.microbe_name}\n總檢驗菌株數: ${totalStrains}\n感受性 S菌株數: ${sensitiveStrains}\n感受性百分比: ${val}%`;
+        }
+        
+        return `抗生素: ${a.anti_name || a.anti_shortname}\n微生物: ${row.microbe_name}\n檢驗菌株數: -\n感受性 S菌株數: -`;
+      }
+      const hasData = visibleRows.length > 0 && visibleAntibiotics.length > 0;
+
+      function bgByLevel(depth, isCategory) {
+        if (isCategory) return "bg-slate-100"; // 分類列(AN-GN/AN-GP)
+        if (depth === 1) return "bg-slate-50";     // 父層
+        if (depth === 2) return "bg-slate-50/40";  // 子層
+        return "bg-slate-100/50";               // 次子層(或更深)
+      }
+
+      return (
+        <div className="p-6 bg-white rounded-2xl shadow">
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <div className="text-sm font-medium text-slate-800">{title}</div>
+              <div className="text-xs text-slate-500">分母：分析之菌種/屬及抗生素項目組合有藥敏試驗結果之菌株數。 分子：分母中抗生素藥敏試驗結果為 S 之菌株數。敏感性百分比 = 分子/分母*100%。</div>
+            </div>
+            <div className="text-xs text-slate-600">
+              可見抗生素：<span className="font-medium text-slate-800">{visibleAntibiotics.length}</span> / {antibiotics.length}
+              {hiddenCount > 0 && <span className="ml-1 text-slate-400">（隱藏 {hiddenCount}）</span>}
+              <button
+                type="button"
+                onClick={() => setShowAllAntibiotics(v => !v)}
+                className="ml-3 rounded-lg border border-slate-200 bg-white px-2.5 py-1 hover:bg-slate-50"
+              >
+                {showAllAntibiotics ? "只顯示有數據" : "顯示全部抗生素"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowLowCountMicrobes(v => !v)}
+                className="ml-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1 hover:bg-slate-50"
+              >
+                {showLowCountMicrobes ? "隱藏檢驗菌株數<20株" : "顯示全部微生物"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSortAlphabetically(v => !v)}
+                className="ml-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1 hover:bg-slate-50"
+              >
+                {sortAlphabetically ? "預設排序" : "字母排序"}
+              </button>
+            </div>
+          </div>
+
+          {!hasData ? (
+            <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-slate-500">尚未載入資料。</div>
+          ) : (
+            <div className="overflow-x-auto w-full">
+              <table className="min-w-[1400px] w-full border-separate border-spacing-0 text-sm text-center">
+                <thead>
+                  <tr>
+                    <th className="sticky left-0 z-10 border-b border-slate-200 bg-white px-3 py-1 text-left text-xs font-medium text-slate-600" rowSpan={2}>分類 / 微生物名稱</th>
+                    {classGroups.map((g, idx) => (
+                      <th key={idx} className="border-b border-slate-200 bg-slate-50 px-3 py-1 text-center text-[11px] font-medium text-slate-700" colSpan={g.span}>
+                        {g.anti_class}
+                      </th>
+                    ))}
+                  </tr>
+                  <tr>
+                    {visibleAntibiotics.map((a, idx) => (
+                      <th
+                        key={idx}
+                        className={"border-b border-slate-200 bg-white px-3 py-2 text-center align-bottom " + (isGroupEnd[idx] ? "border-r-4 border-r-slate-300" : "")}
+                        title={a.anti_name}
+                      >
+                        <span className="text-xs font-medium text-slate-800">{a.anti_shortname}</span>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleRows.map((m) => {
+                    const key = m.id || m.microbe_name;
+                    const depth = m._level || 0;
+                    const hasChildren = !!m._hasChildren;
+                    const isCategory = m._type === 'category';
+                    return (
+                      <tr key={key} className={`${bgByLevel(depth, isCategory)} hover:bg-slate-50/60`}>
+                        <td className={"sticky left-0 z-0 px-3 py-2 text-sm " + (isCategory ? "font-semibold text-slate-700 bg-slate-100" : "text-slate-800 bg-white")}>
+                          <div className="flex items-center gap-2">
+                            {hasChildren ? (
+                              <button
+                                type="button"
+                                onClick={() => toggleRow(m)}
+                                className={"mr-1 h-5 w-5 rounded border border-slate-300 text-xs leading-4 " + (expanded[key] ? "bg-slate-600 text-white border-slate-600" : "bg-white")}
+                                title={expanded[key] ? "收合" : "展開"}
+                              >
+                                {expanded[key] ? "−" : "+"}
+                              </button>
+                            ) : (
+                              <span className="mr-6" />
+                            )}
+
+                            {/* 這個 span 做縮排＆導引線 */}
+                            <span
+                              style={{
+                                paddingLeft: Math.max(0, depth - 1) * 12,          // 縮排
+                                borderLeft: depth > 1 ? "2px solid #cbd5e1" : "0", // 導引線（slate-300）
+                              }}
+                              className={
+                                depth === 0 ? "font-bold text-slate-800" :
+                                depth === 1 ? "font-semibold text-slate-700" :
+                                "text-slate-600 text-sm"
+                              }
+                            >
+                              {m.microbe_name}
+                              {!isCategory && !m._virtual && (
+                                <span className="ml-2 text-xs text-slate-400">
+                                  ({getStrainCount(m.microbe_name)}株)
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        </td>
+                          
+                        {visibleAntibiotics.map((a, cIdx) => {
+                          const v = valueForCell(m, a.anti_shortname);
+                          const display = (typeof v === 'number') ? `${clamp(v)}%` : "-";
+                          const quality = (typeof v === 'number') ? (v >= 80 ? "good" : v >= 60 ? "warn" : "bad") : "na";
+                          return (
+                            <td key={cIdx} className={"px-3 py-2 text-sm text-center " + (isGroupEnd[cIdx] ? "border-r-4 border-r-slate-200" : "")}>
+                              <span
+                                className={
+                                  quality === "good" ? "rounded-md bg-emerald-50 px-2 py-0.5 text-emerald-700" :
+                                  quality === "warn" ? "rounded-md bg-amber-50 px-2 py-0.5 text-amber-700" :
+                                  quality === "bad" ? "rounded-md bg-rose-50 px-2 py-0.5 text-rose-700" :
+                                  "text-slate-500"
+                                }
+                                title={tooltip(a, m)}
+                              >
+                                {display}
+                              </span>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <div className="mt-3 text-xs text-slate-500">~~~測試測試測試~~~ (總計745筆厭氧菌檢驗結果)</div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    /*****************
+     * 真實測試資料區    *
+     *****************/
+    const antibioticsFromExcel = [
+      { anti_class: "Penicillin Group", anti_shortname: "P", anti_name: "Penicillin G" },
+      { anti_class: "Penicillin Group", anti_shortname: "AM", anti_name: "Ampicillin" },
+      { anti_class: "Penicillin Group", anti_shortname: "AMC", anti_name: "Amoxicillin/Clavulanate" },
+      { anti_class: "Penicillin Group", anti_shortname: "OX", anti_name: "Oxacillin" },
+      { anti_class: "Penicillin Group", anti_shortname: "SAM", anti_name: "Ampicillin/Sulbactam" },
+      { anti_class: "Cephalosporin Group 1st", anti_shortname: "CZ(O)", anti_name: "Cefazolin other" },
+      { anti_class: "Cephalosporin Group 1st", anti_shortname: "CZ(U)", anti_name: "Cefazolin Urine" },
+      { anti_class: "Cephalosporin Group 2nd", anti_shortname: "CMZ", anti_name: "Cefmetazole" },
+      { anti_class: "Cephalosporin Group 2nd", anti_shortname: "CXM", anti_name: "Cefuroxime" },
+      { anti_class: "Cephalosporin Group 3rd", anti_shortname: "CAZ", anti_name: "Ceftazidime" },
+      { anti_class: "Cephalosporin Group 3rd", anti_shortname: "CTX", anti_name: "Cefotaxime" },
+      { anti_class: "Cephalosporin Group 3rd", anti_shortname: "CRO", anti_name: "Ceftriaxone" },
+      { anti_class: "Cephalosporin Group 3rd", anti_shortname: "CFM", anti_name: "Cefixime" },
+      { anti_class: "Cephalosporin Group 3rd", anti_shortname: "CPD", anti_name: "Cefpodoxime" },
+      { anti_class: "Cephalosporin Group 4th", anti_shortname: "FEP", anti_name: "Cefepime" },
+      { anti_class: "Carbapenem Group", anti_shortname: "IPM", anti_name: "Imipenem" },
+      { anti_class: "Carbapenem Group", anti_shortname: "MEM", anti_name: "Meropenem" },
+      { anti_class: "Carbapenem Group", anti_shortname: "ETP", anti_name: "Ertapenem" },
+      { anti_class: "Other β-Lactam", anti_shortname: "TZP", anti_name: "Piperacillin/Tazobactam" },
+      { anti_class: "Other β-Lactam", anti_shortname: "CZA", anti_name: "Ceftazidime/Avibactam" },
+      { anti_class: "Other β-Lactam", anti_shortname: "CTT", anti_name: "Ceftolozane/Tazobactam" },
+      { anti_class: "Oxacephem", anti_shortname: "FLO", anti_name: "Flomoxef" },
+      { anti_class: "Aminoglycosides", anti_shortname: "AN", anti_name: "Amikacin" },
+      { anti_class: "Aminoglycosides", anti_shortname: "AN(U)", anti_name: "Amikacin urine" },
+      { anti_class: "Aminoglycosides", anti_shortname: "GM", anti_name: "Gentamicin 10μg" },
+      { anti_class: "Aminoglycosides", anti_shortname: "GMh", anti_name: "Gentamicin 120μg" },
+      { anti_class: "Fluoroquinolones", anti_shortname: "CIP", anti_name: "Ciprofloxacin" },
+      { anti_class: "Fluoroquinolones", anti_shortname: "LVX", anti_name: "Levofloxacin" },
+      { anti_class: "Fluoroquinolones", anti_shortname: "MXF", anti_name: "Moxifloxacin" },
+      { anti_class: "Tetracyclines", anti_shortname: "TE", anti_name: "Tetracycline" },
+      { anti_class: "Tetracyclines", anti_shortname: "MI", anti_name: "Minocycline" },
+      { anti_class: "Macrolides", anti_shortname: "E", anti_name: "Erythromycin" },
+      { anti_class: "Lincosamides", anti_shortname: "CC", anti_name: "Clindamycin" },
+      { anti_class: "Oxazolidinones", anti_shortname: "LZD", anti_name: "Linezolid" },
+      { anti_class: "Chloramphenicol", anti_shortname: "C", anti_name: "Chloramphenicol" },
+      { anti_class: "Glycopeptides", anti_shortname: "VA", anti_name: "Vancomycin" },
+      { anti_class: "Cyclic Lipopeptides", anti_shortname: "DAP", anti_name: "Daptomycin" },
+      { anti_class: "Glycylcyclines", anti_shortname: "TGC", anti_name: "Tigecycline" },
+      { anti_class: "Polymyxins", anti_shortname: "CL", anti_name: "Colistin" },
+      { anti_class: "Steroid Antibiotics", anti_shortname: "FA", anti_name: "Fusidic acid" },
+      { anti_class: "Nitroimidazoles", anti_shortname: "MET", anti_name: "Metronidazole" },
+      { anti_class: "Sulfonamide Combinations", anti_shortname: "SXT", anti_name: "Trimethoprim/Sulfamethoxazole" }
+    ];
+
+    const microbesFromTest = [
+      // AN-GN - 厭氧革蘭氏陰性菌
+      { id: "BACTEROIDESFRAGILIS", microbe_name: "Bacteroides fragilis" },
+      { id: "BACTEROIDESTHETAIOTAOMICRON", microbe_name: "Bacteroides thetaiotaomicron" },
+      { id: "BACTEROIDESOVATUS", microbe_name: "Bacteroides ovatus" },
+      { id: "BACTEROIDESPYOGENES", microbe_name: "Bacteroides pyogenes" },
+      { id: "BACTEROIDESUNIFORMIS", microbe_name: "Bacteroides uniformis" },
+      { id: "PHOCAEICOLAVULGATUS", microbe_name: "Phocaeicola vulgatus(Bacteroides vulgatus)" },
+      { id: "PREVOTELLIABIVIA", microbe_name: "Prevotella bivia" },
+      { id: "FUSOBACTERIUMVARIUM", microbe_name: "Fusobacterium varium" },
+      { id: "PARABACTEROIDESDISTASONIS", microbe_name: "Parabacteroides distasonis" },
+      
+      // AN-GP - 厭氧革蘭氏陽性菌
+      { id: "CLOSTRIDIOIDESDIFFICILE", microbe_name: "Clostridioides difficile" },
+      { id: "CLOSTRIDIUMPERFRINGENS", microbe_name: "Clostridium perfringens" },
+      { id: "CLOSTRIDIUMIINNOCUUM", microbe_name: "Clostridium innocuum" },
+      { id: "CLOSTRIDIUMRAMOSUM", microbe_name: "Clostridium ramosum" },
+      { id: "FINEGOLIDAMAGNA", microbe_name: "Finegoldia magna" },
+      { id: "FINEGOLDIASPECIES", microbe_name: "Finegoldia species" },
+      { id: "PEPTONIPHILUSSP", microbe_name: "Peptoniphilus sp" },
+      { id: "PARVIMONASMICRA", microbe_name: "Parvimonas micra" },
+      { id: "BIFIDOBACTERIUMLONGUM", microbe_name: "Bifidobacterium longum" },
+      { id: "BIFIDOBACTERIUMBREVE", microbe_name: "Bifidobacterium breve" },
+    ];
+
+    // 測試資料：基於745筆檢驗結果計算的感受性百分比
+    const excelData = {
+      // AN-GN - 厭氧革蘭氏陰性菌
+      // Bacteroides fragilis (160株)
+      BACTEROIDESFRAGILIS: { MET: 100, SAM: 65, CC: 41, C: 94, P: 0, AM: 15, AMC: 75, TGC: 95 },
+      
+      // Bacteroides thetaiotaomicron (59株)
+      BACTEROIDESTHETAIOTAOMICRON: { MET: 98, SAM: 44, CC: 8, C: 86, P: 0, AM: 12, AMC: 68, TGC: 92 },
+      
+      // Bacteroides ovatus (17株)
+      BACTEROIDESOVATUS: { MET: 100, SAM: 35, CC: 24, C: 88, P: 0, AM: 18, AMC: 71 },
+      
+      // Bacteroides pyogenes (7株)
+      BACTEROIDESPYOGENES: { MET: 100, SAM: 57, CC: 29, C: 86, P: 0 },
+      
+      // Bacteroides uniformis (5株)
+      BACTEROIDESUNIFORMIS: { MET: 100, SAM: 40, CC: 20, C: 80, P: 0 },
+      
+      // Phocaeicola vulgatus (21株)
+      PHOCAEICOLAVULGATUS: { MET: 100, SAM: 76, CC: 52, C: 95, P: 0, AM: 24, AMC: 81 },
+      
+      // Prevotella bivia (20株)
+      PREVOTELLIABIVIA: { MET: 100, SAM: 100, CC: 30, C: 95, P: 5, AM: 85, AMC: 95 },
+      
+      // Fusobacterium varium (17株)
+      FUSOBACTERIUMVARIUM: { MET: 100, SAM: 76, CC: 24, C: 100, P: 71, AM: 82, AMC: 88 },
+      
+      // Parabacteroides distasonis (12株)
+      PARABACTEROIDESDISTASONIS: { MET: 100, SAM: 17, CC: 25, C: 100, P: 0, AM: 8, AMC: 58 },
+      
+      // AN-GP - 厭氧革蘭氏陽性菌
+      // Clostridioides difficile (170株)
+      CLOSTRIDIOIDESDIFFICILE: { MET: 98, VA: 100, CC: 12, LZD: 100, TGC: 100, C: 78, E: 15, DAP: 95 },
+      
+      // Clostridium perfringens (36株)
+      CLOSTRIDIUMPERFRINGENS: { MET: 100, SAM: 100, CC: 50, C: 100, P: 75, AM: 92, AMC: 97, E: 33, VA: 100 },
+      
+      // Clostridium innocuum (9株)
+      CLOSTRIDIUMIINNOCUUM: { MET: 89, SAM: 89, CC: 78, C: 100, P: 78, VA: 100 },
+      
+      // Clostridium ramosum (9株)
+      CLOSTRIDIUMRAMOSUM: { MET: 100, SAM: 78, CC: 67, C: 89, P: 67, VA: 100 },
+      
+      // Finegoldia magna (36株)
+      FINEGOLIDAMAGNA: { MET: 100, SAM: 100, CC: 53, C: 100, P: 97, AM: 100, AMC: 100, E: 47, VA: 100 },
+      
+      // Finegoldia species (8株)
+      FINEGOLDIASPECIES: { MET: 100, SAM: 100, CC: 63, C: 100, P: 100, VA: 100 },
+      
+      // Peptoniphilus sp (23株)
+      PEPTONIPHILUSSP: { MET: 91, SAM: 100, CC: 74, C: 96, P: 96, AM: 96, E: 52, VA: 100 },
+      
+      // Parvimonas micra (16株)
+      PARVIMONASMICRA: { MET: 100, SAM: 100, CC: 100, C: 100, P: 100, AM: 100, E: 69, VA: 100 },
+      
+      // Bifidobacterium longum (8株)
+      BIFIDOBACTERIUMLONGUM: { MET: 13, SAM: 100, CC: 88, C: 100, E: 75, VA: 100 },
+      
+      // Bifidobacterium breve (8株)
+      BIFIDOBACTERIUMBREVE: { MET: 25, SAM: 100, CC: 75, C: 100, E: 63, VA: 100 }
+    };
+
+    // 可選：若提供 I/S/R 類別，可優先用它判斷是否為 S
+    const catStatus = {
+      // 例如：BACTEROIDESFRAGILIS: { MET: "S" }
+    };
+
+    function Preview(){
+      return (
+        <ASTSusceptibilityTable
+          antibiotics={antibioticsFromExcel}
+          microbes={microbesFromTest}
+          data={excelData}
+          cat={catStatus}
+        />
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<Preview />);
+  </script>
+</body>
+</html>
