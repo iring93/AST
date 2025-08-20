@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>模擬台大醫院ANAEROBIC BACTERIA微生物抗生素感受性報表</title>
+  <title>模擬OO醫院ANAEROBIC BACTERIA微生物抗生素感受性報表</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -11,7 +11,7 @@
 </head>
 <body class="bg-slate-50">
   <div class="max-w-screen-2xl w-full mx-auto py-8 px-4">
-    <h1 class="text-xl font-semibold text-slate-800 mb-2">模擬台大醫院ANAEROBIC BACTERIA微生物抗生素感受性報表</h1>
+    <h1 class="text-xl font-semibold text-slate-800 mb-2">模擬OO醫院ANAEROBIC BACTERIA微生物抗生素感受性報表</h1>
     <p class="text-slate-600 text-sm mb-4">使用說明：+/- 可展開，基於745筆檢驗結果 (包含AN-GN及AN-GP)</p>
     <div id="root"></div>
   </div>
@@ -188,7 +188,7 @@
     }
 
     function ASTSusceptibilityTable({
-      title = "模擬台大醫院 2024年 ANAEROBIC BACTERIA 微生物抗生素感受性報表（基於745筆檢驗結果）",
+      title = "模擬OO醫院 2024年 ANAEROBIC BACTERIA 微生物抗生素感受性報表（基於745筆檢驗結果）",
       antibiotics = [],
       microbes = [],
       data = {},
@@ -657,4 +657,5 @@
     root.render(<Preview />);
   </script>
 </body>
+
 </html>
