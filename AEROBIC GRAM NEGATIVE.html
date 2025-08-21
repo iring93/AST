@@ -1,6 +1,65 @@
 <!doctype html>
 <html lang="zh-Hant">
 <head>
+  <style>
+    /* 統一控制縮排與元件寬度 */
+    .tree-cell{
+      --indent: 16px;   /* 每一層的縮排距離 */
+      --btn: 20px;      /* 展開/收合按鈕寬度與高度 */
+      position: relative;
+      display: grid;
+      grid-template-columns: var(--btn) 1fr;  /* 左：按鈕；右：標籤 */
+      align-items: center;
+       /* ▶ 第一層不縮排；從第2層開始縮 */
+      padding-left: calc(max(0, (var(--level) - 1)) * var(--indent));
+      column-gap: 8px;  /*讓按鈕與名稱固定留 8px 間距 */
+    }
+
+    /* 垂直導引線（整列連續、各層對齊） */
+    .tree-cell::before{
+      content:"";
+      position:absolute;
+      left: calc(max(0, (var(--level) - 1)) * var(--indent) + var(--btn)/2);
+      top:0; bottom:0;
+      width:1px;
+      background:#cbd5e1; /* slate-300 */
+    }
+    /* 分類(0)與父層(1)都不畫導引線 */
+    .tree-cell[data-level="0"]::before,
+    .tree-cell[data-level="1"]::before { display:none; }
+
+    /* 展開/收合按鈕：固定方塊，對齊更穩定 */
+    .tree-toggle{
+      width:var(--btn); height:var(--btn);
+      display:inline-flex; align-items:center; justify-content:center;
+      border:1px solid #cbd5e1; border-radius:6px;
+      font-size:12px; line-height:1; background:#fff; color:#1f2937;
+    }
+    .tree-toggle.is-open{ background:#334155; color:#fff; border-color:#334155; }
+    .tree-toggle.placeholder{ border:0; background:transparent; }
+
+    /* 名稱與株數（允許換行並在單字中斷，括號長字不會撐寬） */
+    .tree-label{ display:inline-flex; align-items:baseline; gap:.5rem; }
+    .tree-label .name{
+      white-space: normal;          /* ▶ 允許換行 */
+      overflow-wrap: anywhere;      /* ▶ 括號與長學名可中斷 */
+      word-break: break-word;
+    }
+    .tree-label .count{ font-size:12px; color:#94a3b8; }
+
+    /* 不同語意的字重色彩（沿用你原本邏輯） */
+    .tree-label.cat   .name{ font-weight:700; color:#0f172a; }
+    .tree-label.real  .name{ font-weight:600; color:#334155; }
+    .tree-label.virtual .name{ font-weight:400; color:#475569; }
+
+    /* 設置微生物欄位寬度 */
+    :root { --microbe-col: clamp(300px, 24vw, 420px); }
+    th.th-microbe, td.td-microbe {
+      width: var(--microbe-col);
+      min-width: var(--microbe-col);
+      max-width: 420px; /* 可保留或調整 */
+    }
+  </style>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>模擬OO醫院AEROBIC GRAM NEGATIVE微生物抗生素感受性報表</title>
@@ -566,7 +625,7 @@
               <table className="min-w-[1400px] w-full border-separate border-spacing-0 text-sm text-center">
                 <thead>
                   <tr>
-                    <th className="sticky left-0 z-10 border-b border-slate-200 bg-white px-3 py-1 text-left text-xs font-medium text-slate-600" rowSpan={2}>分類 / 微生物名稱</th>
+                    <th className="sticky left-0 z-10 border-b border-slate-200 bg-white px-3 py-1 text-left text-xs font-medium text-slate-600 th-microbe" rowSpan={2}>分類 / 微生物名稱</th>
                     {classGroups.map((g, idx) => (
                       <th key={idx} className="border-b border-slate-200 bg-slate-50 px-3 py-1 text-center text-[11px] font-medium text-slate-700" colSpan={g.span}>
                         {g.anti_class}
@@ -593,40 +652,32 @@
                     const isCategory = m._type === 'category';
                     return (
                       <tr key={key} className={`${bgByLevel(depth, isCategory)} hover:bg-slate-50/60`}>
-                        <td className={"sticky left-0 z-0 px-3 py-2 text-sm " + (isCategory ? "font-semibold text-slate-700 bg-slate-100" : "text-slate-800 bg-white")}>
-                          <div className="flex items-center gap-2">
+                        <td className={
+                          "sticky left-0 z-0 px-3 py-2 text-sm text-left td-microbe " +    // ← 加上 text-left
+                          (isCategory ? "font-semibold text-slate-700 bg-slate-100" : "text-slate-800 bg-white")
+                        }>
+                         
+                          <div className="tree-cell" style={{ "--level": depth }} data-level={depth}>
                             {hasChildren ? (
                               <button
                                 type="button"
                                 onClick={() => toggleRow(m)}
-                                className={"mr-1 h-5 w-5 rounded border border-slate-300 text-xs leading-4 " + (expanded[key] ? "bg-slate-600 text-white border-slate-600" : "bg-white")}
+                                aria-expanded={!!expanded[key]}
+                                className={"tree-toggle " + (expanded[key] ? "is-open" : "")}
                                 title={expanded[key] ? "收合" : "展開"}
                               >
                                 {expanded[key] ? "−" : "+"}
                               </button>
                             ) : (
-                              <span className="mr-6" />
+                              <span className="tree-toggle placeholder" />
                             )}
 
-                            {/* 這個 span 做縮排＆導引線 */}
-                            <span
-                              style={{
-                                paddingLeft: Math.max(0, depth - 1) * 12,          // 縮排
-                                borderLeft: depth > 1 ? "2px solid #cbd5e1" : "0", // 導引線（slate-300）
-                              }}
-                              className={
-                                depth === 0 ? "font-bold text-slate-800" :
-                                depth === 1 ? "font-semibold text-slate-700" :
-                                "text-slate-600 text-sm"
-                              }
-                            >
-                              {m.microbe_name}
+                            <div className={"tree-label " + (isCategory ? "cat" : m._virtual ? "virtual" : "real")}>
+                              <div className="name">{m.microbe_name}</div>
                               {!isCategory && !m._virtual && (
-                                <span className="ml-2 text-xs text-slate-400">
-                                  ({getStrainCount(m.microbe_name)}株)
-                                </span>
+                                <div className="count">（{getStrainCount(m.microbe_name)}株）</div>
                               )}
-                            </span>
+                            </div>
                           </div>
                         </td>
                           
