@@ -200,7 +200,7 @@
         const paFQ = { id: "__P_PA_FQ__", microbe_name: paShort + " (Fluoroquinolone)", _virtual: true };
         addChild(parent, paFQ);               // ★ 同樣掛在「P. aeruginosa」底下
 
-        const fqBothS = isS(pid, "LVX") && isS(pid, "CIP");   // 兩者皆 S → non-QRDRs
+        const fqBothS = isS(pid, "LVX") && isS(pid, "CIP");   // 兩者皆 S → non-QR
         const nonQR = {
           id: pid + "_nonQRDRs",
           microbe_name: paShort + " — non-QRDRs",
@@ -209,8 +209,8 @@
           _proxyRowKey: pid
         };
         const QR = {
-          id: pid + "_QRDRs",
-          microbe_name: paShort + " — QRDRs",
+          id: pid + "_QR",
+          microbe_name: paShort + " — QR",
           _virtual: true,
           _active: !fqBothS,
           _proxyRowKey: pid
