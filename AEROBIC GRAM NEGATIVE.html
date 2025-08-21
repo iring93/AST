@@ -202,8 +202,8 @@
 
         const fqBothS = isS(pid, "LVX") && isS(pid, "CIP");   // 兩者皆 S → non-QR
         const nonQR = {
-          id: pid + "_nonQRDRs",
-          microbe_name: paShort + " — non-QRDRs",
+          id: pid + "_nonQR",
+          microbe_name: paShort + " — non-QR",
           _virtual: true,
           _active: fqBothS,
           _proxyRowKey: pid
